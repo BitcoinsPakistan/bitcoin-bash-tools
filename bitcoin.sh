@@ -1,6 +1,9 @@
 #!/bin/bash
 # Various bash bitcoin tools
 #
+# Originally from https://github.com/grondilu/bitcoin-bash-tools
+# Modified by Bitcoins Pakistan (http://bitcoinspakistan.com) for multiple key generation.
+#
 # requires dc, the unix desktop calculator (which should be included in the
 # 'bc' package)
 #
@@ -83,72 +86,35 @@ hexToAddress() {
     }
 }
 
-newBitcoinKey() {
-    if [[ "$1" =~ ^[5KL] ]] && checkBitcoinAddress "$1"
-    then
-	decoded="$(decodeBase58 "$1")"
-	if [[ "$decoded" =~ ^80([0-9A-F]{64})(01)?[0-9A-F]{8}$ ]]
-	then $FUNCNAME "0x${BASH_REMATCH[1]}"
+newBitcoinKeys() {
+	#number test by Alberto Zaccagni/Gilles http://stackoverflow.com/a/808740
+	if [ "$1" -eq "$1" ] 2> /dev/null
+		then
+			for (( counter=1 ; counter <= $1; counter++ ))
+			do
+				local seed=`openssl rand -rand <(date +%s%N; ps -ef) -hex 32 2>&-`;	
+				local uncompressed_wif="$(hexToAddress "$seed" 80 64)"
+				dc -e "$ec_dc lG I16i${seed^^}ri lMx 16olm~ n[ ]nn" |
+				{
+	    			read y x
+	    			X="$(printf "%64s" $x| sed 's/ /0/g')"
+	    			Y="$(printf "%64s" $y| sed 's/ /0/g')"
+	    			if [[ "$y" =~ [02468ACE]$ ]]
+	    			then y_parity="02"
+	    			else y_parity="03"
+	    			fi
+	    			uncompressed_addr="$(hexToAddress "$(perl -e "print pack q(H*), q(04$X$Y)" | hash160)")"
+	    			echo "$uncompressed_wif,$uncompressed_addr"
+				}
+			done
+		else
+			echo "Usage: newBitcoinKeys [number of keys] [optional output file]"
 	fi
-    elif [[ "$1" =~ ^[0-9]+$ ]]
-    then $FUNCNAME "0x$(dc -e "16o$1p")"
-    elif [[ "${1^^}" =~ ^0X([0-9A-F]+)$ ]]
-    then 
-	local exponent="${BASH_REMATCH[1]}"
-	local uncompressed_wif="$(hexToAddress "$exponent" 80 64)"
-	local compressed_wif="$(hexToAddress "${exponent}01" 80 66)"
-	dc -e "$ec_dc lG I16i${exponent^^}ri lMx 16olm~ n[ ]nn" |
-	{
-	    read y x
-	    X="$(printf "%64s" $x| sed 's/ /0/g')"
-	    Y="$(printf "%64s" $y| sed 's/ /0/g')"
-	    if [[ "$y" =~ [02468ACE]$ ]]
-	    then y_parity="02"
-	    else y_parity="03"
-	    fi
-	    uncompressed_addr="$(hexToAddress "$(perl -e "print pack q(H*), q(04$X$Y)" | hash160)")"
-	    compressed_addr="$(hexToAddress "$(perl -e "print pack q(H*), q($y_parity$X)" | hash160)")"
-	    echo ---
-            echo "secret exponent:          0x$exponent"
-	    echo "public key:"
-	    echo "    X:                    $X"
-	    echo "    Y:                    $Y"
-            echo "compressed:"
-            echo "    WIF:                  $compressed_wif"
-            echo "    bitcoin address:      $compressed_addr"
-            echo "uncompressed:"
-            echo "    WIF:                  $uncompressed_wif"
-            echo "    bitcoin address:      $uncompressed_addr"
-	}
-    elif test -z "$1"
-    then $FUNCNAME "0x$(openssl rand -rand <(date +%s%N; ps -ef) -hex 32 2>&-)"
-    else
-	echo unknown key format "$1" >&2
-	return 2
-    fi
 }
 
-vanityAddressFromPublicPoint() {
-    if [[ "$1" =~ ^04([0-9A-F]{64})([0-9A-F]{64})$ ]]
-    then
-	dc <<<"$ec_dc 16o
-	0 ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} rlp*+ 
-	[lGlAxdlm~rn[ ]nn[ ]nr1+prlLx]dsLx
-	" |
-	while read -r x y n
-	do
-	    public_key="$(printf "04%64s%64s" $x $y | sed 's/ /0/g')"
-	    h="$(perl -e "print pack q(H*), q($public_key)" | hash160)"
-	    addr="$(hexToAddress "$h")"
-	    if [[ "$addr" =~ "$2" ]]
-	    then
-		echo "FOUND! $n: $addr"
-		return
-	    else echo "$n: $addr"
-	    fi
-	done
-    else 
-	echo unexpected format for public point >&2
-	return 1
-    fi
-}
+if [ $2 ]
+	then
+		newBitcoinKeys $1 | tee $2 | cut -d, -f2
+	else
+		newBitcoinKeys $1
+fi	
